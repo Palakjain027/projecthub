@@ -1,0 +1,449 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== ENUMS ====================
+
+enum UserRole {
+  super_admin
+  admin
+  seller
+  buyer
+  freelancer
+  free_user
+  paid_user
+}
+
+enum ProjectStatus {
+  draft
+  pending_review
+  approved
+  rejected
+  archived
+}
+
+enum OrderStatus {
+  pending
+  completed
+  refunded
+  disputed
+}
+
+enum BidStatus {
+  pending
+  accepted
+  rejected
+}
+
+enum RequestStatus {
+  open
+  in_progress
+  submitted
+  revision
+  completed
+  cancelled
+  disputed
+}
+
+enum MilestoneStatus {
+  pending
+  completed
+  paid
+}
+
+enum SubscriptionPlan {
+  free
+  basic
+  pro
+  enterprise
+}
+
+enum SubscriptionStatus {
+  active
+  past_due
+  cancelled
+  incomplete
+}
+
+enum NotificationType {
+  order_placed
+  order_completed
+  project_approved
+  project_rejected
+  bid_received
+  bid_accepted
+  bid_rejected
+  payment_received
+  payout_completed
+  review_received
+  dispute_opened
+  dispute_resolved
+  subscription_created
+  subscription_cancelled
+  system_announcement
+}
+
+enum EarningStatus {
+  pending
+  paid
+}
+
+enum DisputeStatus {
+  open
+  under_review
+  resolved
+  closed
+}
+
+// ==================== MODELS ====================
+
+model User {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  passwordHash      String    @map("password_hash")
+  username          String    @unique
+  fullName          String?   @map("full_name")
+  avatarUrl         String?   @map("avatar_url")
+  bio               String?
+  role              UserRole  @default(free_user)
+  isVerified        Boolean   @default(false) @map("is_verified")
+  isActive          Boolean   @default(true) @map("is_active")
+  isBanned          Boolean   @default(false) @map("is_banned")
+  stripeCustomerId  String?   @map("stripe_customer_id")
+  stripeAccountId   String?   @map("stripe_account_id")
+  payoutEnabled     Boolean   @default(false) @map("payout_enabled")
+  monthlyDownloads  Int       @default(0) @map("monthly_downloads")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  projects          Project[]
+  ordersAsBuyer     Order[]   @relation("BuyerOrders")
+  ordersAsSeller    Order[]   @relation("SellerOrders")
+  reviewsGiven      Review[]  @relation("ReviewsGiven")
+  reviewsReceived   Review[]  @relation("ReviewsReceived")
+  notifications     Notification[]
+  subscriptions     Subscription[]
+  customRequestsAsClient    CustomRequest[] @relation("ClientRequests")
+  customRequestsAsFreelancer CustomRequest[] @relation("FreelancerRequests")
+  bids              Bid[]
+  earnings          Earning[]
+  refreshTokens     RefreshToken[]
+  auditLogs         AuditLog[]
+  disputesRaised    Dispute[]
+
+  @@map("users")
+}
+
+model Category {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  slug        String    @unique
+  icon        String?
+  description String?
+  parentId    String?   @map("parent_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  // Self-relation for subcategories
+  parent      Category? @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children    Category[] @relation("CategoryHierarchy")
+  projects    Project[]
+
+  @@map("categories")
+}
+
+model Project {
+  id               String        @id @default(cuid())
+  sellerId         String        @map("seller_id")
+  title            String
+  slug             String        @unique
+  shortDescription String?       @map("short_description")
+  description      String        // Rich text content
+  categoryId       String        @map("category_id")
+  tags             String[]
+  price            Decimal       @db.Decimal(10, 2)
+  isFree           Boolean       @default(false) @map("is_free")
+  status           ProjectStatus @default(draft)
+  thumbnailUrl     String?       @map("thumbnail_url")
+  demoVideoUrl     String?       @map("demo_video_url")
+  sourceCodeUrl    String?       @map("source_code_url")
+  documentationUrl String?       @map("documentation_url")
+  pptUrl           String?       @map("ppt_url")
+  reportUrl        String?       @map("report_url")
+  livePreviewUrl   String?       @map("live_preview_url")
+  techStack        String[]      @map("tech_stack")
+  features         String[]
+  downloadsCount   Int           @default(0) @map("downloads_count")
+  viewsCount       Int           @default(0) @map("views_count")
+  averageRating    Decimal       @default(0) @db.Decimal(2, 1) @map("average_rating")
+  reviewCount      Int           @default(0) @map("review_count")
+  isFeatured       Boolean       @default(false) @map("is_featured")
+  rejectionReason  String?       @map("rejection_reason")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  seller    User        @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  category  Category    @relation(fields: [categoryId], references: [id])
+  reviews   Review[]
+  orders    Order[]
+
+  @@index([sellerId])
+  @@index([categoryId])
+  @@index([status])
+  @@index([isFree])
+  @@index([isFeatured])
+  @@map("projects")
+}
+
+model Order {
+  id                    String      @id @default(cuid())
+  buyerId               String      @map("buyer_id")
+  projectId             String      @map("project_id")
+  sellerId              String      @map("seller_id")
+  amount                Decimal     @db.Decimal(10, 2)
+  platformFee           Decimal     @db.Decimal(10, 2) @map("platform_fee")
+  sellerEarnings        Decimal     @db.Decimal(10, 2) @map("seller_earnings")
+  status                OrderStatus @default(pending)
+  stripePaymentIntentId String?     @map("stripe_payment_intent_id")
+  stripeTransferId      String?     @map("stripe_transfer_id")
+  downloadCount         Int         @default(0) @map("download_count")
+  downloadLimit         Int         @default(3) @map("download_limit")
+  createdAt             DateTime    @default(now()) @map("created_at")
+  updatedAt             DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  buyer     User      @relation("BuyerOrders", fields: [buyerId], references: [id])
+  project   Project   @relation(fields: [projectId], references: [id])
+  seller    User      @relation("SellerOrders", fields: [sellerId], references: [id])
+  earning   Earning?
+  dispute   Dispute?
+
+  @@index([buyerId])
+  @@index([sellerId])
+  @@index([projectId])
+  @@index([status])
+  @@map("orders")
+}
+
+model Review {
+  id                 String   @id @default(cuid())
+  reviewerId         String   @map("reviewer_id")
+  projectId          String   @map("project_id")
+  sellerId           String   @map("seller_id")
+  rating             Int      // 1-5
+  comment            String?
+  isVerifiedPurchase Boolean  @default(false) @map("is_verified_purchase")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  reviewer  User    @relation("ReviewsGiven", fields: [reviewerId], references: [id])
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  seller    User    @relation("ReviewsReceived", fields: [sellerId], references: [id])
+
+  @@unique([reviewerId, projectId])
+  @@index([projectId])
+  @@index([sellerId])
+  @@map("reviews")
+}
+
+model CustomRequest {
+  id               String        @id @default(cuid())
+  clientId         String        @map("client_id")
+  freelancerId     String?       @map("freelancer_id")
+  title            String
+  description      String
+  budgetMin        Decimal       @db.Decimal(10, 2) @map("budget_min")
+  budgetMax        Decimal       @db.Decimal(10, 2) @map("budget_max")
+  deadline         DateTime?
+  status           RequestStatus @default(open)
+  attachments      String[]
+  finalDeliveryUrl String?       @map("final_delivery_url")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  client     User        @relation("ClientRequests", fields: [clientId], references: [id])
+  freelancer User?       @relation("FreelancerRequests", fields: [freelancerId], references: [id])
+  bids       Bid[]
+  milestones Milestone[]
+
+  @@index([clientId])
+  @@index([freelancerId])
+  @@index([status])
+  @@map("custom_requests")
+}
+
+model Bid {
+  id           String    @id @default(cuid())
+  requestId    String    @map("request_id")
+  freelancerId String    @map("freelancer_id")
+  amount       Decimal   @db.Decimal(10, 2)
+  deliveryDays Int       @map("delivery_days")
+  proposal     String
+  status       BidStatus @default(pending)
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  request    CustomRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  freelancer User          @relation(fields: [freelancerId], references: [id])
+
+  @@unique([requestId, freelancerId])
+  @@index([requestId])
+  @@index([freelancerId])
+  @@map("bids")
+}
+
+model Milestone {
+  id               String          @id @default(cuid())
+  requestId        String          @map("request_id")
+  title            String
+  description      String?
+  amount           Decimal         @db.Decimal(10, 2)
+  dueDate          DateTime?       @map("due_date")
+  status           MilestoneStatus @default(pending)
+  stripeTransferId String?         @map("stripe_transfer_id")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+
+  // Relations
+  request CustomRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId])
+  @@map("milestones")
+}
+
+model Subscription {
+  id                  String             @id @default(cuid())
+  userId              String             @map("user_id")
+  plan                SubscriptionPlan   @default(free)
+  stripeSubscriptionId String?           @map("stripe_subscription_id")
+  stripePriceId       String?            @map("stripe_price_id")
+  status              SubscriptionStatus @default(active)
+  currentPeriodStart  DateTime?          @map("current_period_start")
+  currentPeriodEnd    DateTime?          @map("current_period_end")
+  cancelAtPeriodEnd   Boolean            @default(false) @map("cancel_at_period_end")
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("subscriptions")
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String           @map("user_id")
+  type      NotificationType
+  title     String
+  message   String
+  data      Json?
+  isRead    Boolean          @default(false) @map("is_read")
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@map("notifications")
+}
+
+model Earning {
+  id             String        @id @default(cuid())
+  sellerId       String        @map("seller_id")
+  orderId        String        @unique @map("order_id")
+  amount         Decimal       @db.Decimal(10, 2)
+  status         EarningStatus @default(pending)
+  stripePayoutId String?       @map("stripe_payout_id")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  seller User  @relation(fields: [sellerId], references: [id])
+  order  Order @relation(fields: [orderId], references: [id])
+
+  @@index([sellerId])
+  @@index([status])
+  @@map("earnings")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  token     String   @unique // Hashed token
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?  @map("actor_id")
+  action    String
+  entity    String
+  entityId  String?  @map("entity_id")
+  metadata  Json?
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId])
+  @@index([entity])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model Dispute {
+  id           String        @id @default(cuid())
+  orderId      String        @unique @map("order_id")
+  raisedById   String        @map("raised_by_id")
+  reason       String
+  evidenceUrls String[]      @map("evidence_urls")
+  status       DisputeStatus @default(open)
+  resolution   String?
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  order    Order @relation(fields: [orderId], references: [id])
+  raisedBy User  @relation(fields: [raisedById], references: [id])
+
+  @@index([status]) 
+  @@map("disputes")
+}
+
+model PlatformSettings {
+  id               String   @id @default(cuid())
+  platformFeeRate  Decimal  @default(0.20) @db.Decimal(4, 2) @map("platform_fee_rate")
+  freeDownloadLimit Int     @default(5) @map("free_download_limit")
+  basicPriceMonthly Decimal @default(9.99) @db.Decimal(10, 2) @map("basic_price_monthly")
+  proPriceMonthly   Decimal @default(29.99) @db.Decimal(10, 2) @map("pro_price_monthly")
+  enterprisePriceMonthly Decimal @default(99.99) @db.Decimal(10, 2) @map("enterprise_price_monthly")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("platform_settings")
+}
